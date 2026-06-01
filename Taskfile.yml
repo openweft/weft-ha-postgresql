@@ -1,0 +1,40 @@
+version: '3'
+
+# Tasks modelled on the other openweft repos so operators moving between them
+# see the same `task build` / `task test` / `task lint` UX.
+
+vars:
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo dev
+  COMMIT:
+    sh: git rev-parse --short HEAD 2>/dev/null || echo none
+  DATE:
+    sh: date -u +%Y-%m-%dT%H:%M:%SZ
+
+tasks:
+  build:
+    desc: Build the weft-ha-postgresql binary (host arch).
+    cmds:
+      - go build -ldflags "-X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.date={{.DATE}}" -o weft-ha-postgresql ./cmd/weft-ha-postgresql
+
+  build-linux:
+    desc: Cross-build the linux/arm64 + linux/amd64 binaries (the ones the micro-VM actually runs).
+    cmds:
+      - GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version={{.VERSION}}" -o dist/weft-ha-postgresql-linux-arm64 ./cmd/weft-ha-postgresql
+      - GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version={{.VERSION}}" -o dist/weft-ha-postgresql-linux-amd64 ./cmd/weft-ha-postgresql
+
+  test:
+    desc: Run all Go tests with the race detector.
+    cmds:
+      - go test ./... -race
+
+  lint:
+    desc: go vet across the module.
+    cmds:
+      - go vet ./...
+
+  tidy:
+    desc: go mod tidy + go mod verify.
+    cmds:
+      - go mod tidy
+      - go mod verify

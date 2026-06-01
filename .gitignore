@@ -1,0 +1,7 @@
+# Build artefacts
+/weft-ha-postgresql
+/dist/
+
+# Editor / OS dross
+.DS_Store
+*.swp
