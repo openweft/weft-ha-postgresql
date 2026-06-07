@@ -82,6 +82,10 @@ func agentCmd() *cobra.Command {
 	f.StringVar(&cfg.PostgresConnURI, "postgres-uri", "", "local libpq connection string")
 	f.StringVar(&cfg.APIAddr, "api-addr", ":8008", "role API listen address")
 	f.StringVar(&cfg.MetricsAddr, "metrics-addr", ":9101", "Prometheus metrics listen address")
+	f.StringVar(&cfg.WeftEndpoint, "weft-endpoint", "", "weft-agent gRPC endpoint for fencing (host:port)")
+	f.StringVar(&cfg.WeftProject, "weft-project", "", "weft project hosting the Postgres microVMs")
+	f.IntVar(&cfg.EtcdSessionTTLSec, "etcd-session-ttl", 15, "etcd lease TTL in seconds (failover floor)")
+	f.DurationVar(&cfg.FenceTimeout, "fence-timeout", 30*time.Second, "wait-for-stopped timeout during fencing")
 	f.DurationVar(&period, "reconcile-interval", 5*time.Second, "reconcile loop interval")
 	return cmd
 }
@@ -93,8 +97,22 @@ func runAgent(ctx context.Context, cfg config.Config, period time.Duration) erro
 	defer stop()
 
 	pg := postgres.NewLocalController(cfg.PostgresConnURI, log)
-	store := dcs.NewEtcdDCS(cfg.EtcdEndpoints, cfg.ClusterName, log)
-	fencer := fencing.NewVMFencer(log)
+	defer pg.Close()
+
+	store := dcs.NewEtcdDCS(cfg.EtcdEndpoints, cfg.ClusterName, cfg.EtcdSessionTTLSec, log)
+	defer func() { _ = store.Close() }()
+
+	// Wire the fencer : when --weft-endpoint is set, hard-stop via gRPC ;
+	// otherwise fall back to NoopFencer with a loud warning (test-mode only).
+	var fencer fencing.Fencer
+	if cfg.WeftEndpoint == "" {
+		log.Warn("no --weft-endpoint configured ; using NoopFencer — DO NOT run unattended")
+		fencer = fencing.NewNoopFencer(log)
+	} else {
+		stopper := fencing.NewGRPCStopper(cfg.WeftEndpoint, cfg.WeftProject, log)
+		defer stopper.Close()
+		fencer = fencing.NewVMFencer(stopper, cfg.FenceTimeout, log)
+	}
 
 	apiSrv := api.New(cfg.APIAddr, pg, log)
 	if err := apiSrv.Start(); err != nil {
@@ -113,6 +131,17 @@ func runAgent(ctx context.Context, cfg config.Config, period time.Duration) erro
 		"api", cfg.APIAddr, "metrics", cfg.MetricsAddr)
 
 	r := reconcile.New(pg, store, fencer, period, log)
+	// selfFn rebuilds the Member identity every tick so a hot-edit of
+	// the conn URI (e.g. password rotation) takes effect on the next
+	// reconcile without restarting the daemon.
+	r.SetSelfFn(func() dcs.Member {
+		return dcs.Member{
+			Name:    cfg.NodeName,
+			DC:      cfg.DC,
+			APIAddr: cfg.APIAddr,
+			ConnURI: cfg.PostgresConnURI,
+		}
+	})
 	if err := r.Run(ctx); err != nil && ctx.Err() == nil {
 		return err
 	}

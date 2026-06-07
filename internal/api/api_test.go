@@ -44,13 +44,13 @@ func TestReplicaEndpoint(t *testing.T) {
 }
 
 func TestRoleErrorIsUnavailable(t *testing.T) {
-	if code := do(t, fakeRP{err: postgres.ErrNotImplemented}, "/primary"); code != http.StatusServiceUnavailable {
+	if code := do(t, fakeRP{err: postgres.ErrNotConnected}, "/primary"); code != http.StatusServiceUnavailable {
 		t.Errorf("/primary with role error: got %d, want 503", code)
 	}
 }
 
 func TestHealthAlwaysOK(t *testing.T) {
-	if code := do(t, fakeRP{err: postgres.ErrNotImplemented}, "/health"); code != http.StatusOK {
+	if code := do(t, fakeRP{err: postgres.ErrNotConnected}, "/health"); code != http.StatusOK {
 		t.Errorf("/health: got %d, want 200", code)
 	}
 }

@@ -2,7 +2,10 @@
 // weft-ha-postgresql agent and its validation.
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // Config is the static bootstrap configuration for one agent instance. In
 // production it is populated from CLI flags fed by weft-network (served into
@@ -25,6 +28,23 @@ type Config struct {
 	APIAddr string
 	// MetricsAddr is the listen address for the Prometheus /metrics endpoint.
 	MetricsAddr string
+	// WeftEndpoint is the weft-agent gRPC endpoint the fencer dials when
+	// it needs to hard-stop a peer's micro-VM. host:port form. Empty
+	// disables real fencing — degrades to NoopFencer (UNSAFE in
+	// production ; only useful for unit tests).
+	WeftEndpoint string
+	// WeftProject is the weft project hosting the Postgres micro-VMs
+	// (the per-plugin install project, e.g. "data"). Used by the gRPC
+	// fencer to disambiguate same-named VMs across projects.
+	WeftProject string
+	// EtcdSessionTTLSec is the lease TTL in seconds. Becomes the lower
+	// bound on failover latency : etcd will hold a fenced primary's
+	// lease for at most this long before declaring it gone.
+	EtcdSessionTTLSec int
+	// FenceTimeout caps how long Fence waits for a confirmed-stopped
+	// state before giving up. A timeout MUST block promotion ; never
+	// invent "probably-stopped".
+	FenceTimeout time.Duration
 }
 
 // Validate reports the first problem found with c, or nil if it is usable.

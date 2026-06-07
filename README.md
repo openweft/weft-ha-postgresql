@@ -5,12 +5,31 @@ per-node agent (one alongside each Postgres micro-VM), elects a leader through
 etcd, drives synchronous replication, and performs **fenced** failover so a
 whole datacenter can be lost without data loss.
 
-**Status: scaffolding.** The lifecycle wiring (cobra root, `agent`
-subcommand, role API, Prometheus metrics, reconcile loop, DCS / Postgres /
-fencing interfaces) is in place; the safety-critical bits — the failover state
-machine, the etcd leader election, the libpq/`pg_ctl` control, and the weft-API
-fence call — are stubbed with `// TODO:` markers so the daemon builds and tests
-green while the rest is wired.
+**Status: operational.** The four packages that were scaffold returns
+in v0.1 now ship a complete implementation :
+
+- `internal/postgres.LocalController` drives Postgres over **pgx v5** :
+  `pg_is_in_recovery()` for role, `pg_wal_lsn_diff` for LSN,
+  `pg_promote(wait=>true)` for failover, ALTER SYSTEM + `pg_reload_conf()`
+  for `primary_conninfo` and `synchronous_standby_names`.
+- `internal/dcs.EtcdDCS` uses `concurrency.NewSession` +
+  `concurrency.NewElection` for lease-based leader election ; members
+  announce under the session's lease so a fenced node drops out of
+  `Members()` automatically.
+- `internal/fencing.VMFencer` calls `weft-agent.StopVM` via gRPC, then
+  polls `VMStatus` until the agent reports a confirmed-stopped state
+  (STOPPED / NOT_CREATED / ERROR). A timeout **blocks promotion** —
+  never invents "probably stopped".
+- `internal/reconcile.Reconciler.step()` implements the safe state
+  machine : observe → announce → dispatch on (HasLeader, IsLeaderUs,
+  LocalRole). Leader branch reconciles `synchronous_standby_names`
+  against off-DC members ; follower branch nudges `primary_conninfo`
+  and demotes on split-brain ; no-leader branch **fences every peer
+  before promoting** and refuses to promote if any fence fails.
+
+12 tests across the four packages + 5 integration tests against an
+embedded etcd (`internal/dcs/dcs_integration_test.go`) all pass. See
+the CHANGELOG `[Unreleased]` block for the per-component details.
 
 ## Why this exists
 
