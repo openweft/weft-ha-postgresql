@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"sort"
 	"time"
 
 	"github.com/openweft/weft-ha-postgresql/internal/dcs"
@@ -146,6 +145,10 @@ func (r *Reconciler) observe(ctx context.Context) (Snapshot, error) {
 	}
 	if lsn, err := r.pg.ReplayLSN(ctx); err == nil {
 		snap.LocalLSN = lsn
+		// Stamp the LSN onto Self so AnnounceMember publishes it ; peers
+		// then read it from their Members() snapshot and isMostAdvanced
+		// can compare bytes-of-WAL instead of guessing by node name.
+		snap.Self.LSN = lsn
 	}
 	leader, has, err := r.store.Leader(ctx)
 	if err != nil && !errors.Is(err, dcs.ErrNoLeader) {
@@ -245,27 +248,61 @@ func (r *Reconciler) stepNoLeader(ctx context.Context, snap Snapshot) error {
 }
 
 // isMostAdvanced returns true when this node's LSN is >= every other
-// member's known LSN. We use the membership directory's announced LSN —
-// if a peer hasn't reported recently, they don't count, which is the
-// right behaviour during a partition.
+// member's announced LSN. The membership directory carries the LSN
+// (see dcs.Member.LSN), populated from pg_last_wal_replay_lsn on
+// replicas / pg_current_wal_lsn on primaries.
 //
-// Today the Member struct doesn't carry an LSN field — we treat
-// "any other member exists" as a tie that we resolve by node-name
-// lexical order. This is a conservative fallback ; lifting an LSN
-// field into Member is the next milestone.
+// Why this matters for safety : the promotion path's whole reason for
+// existing is to preserve durability across a fenced primary loss. If
+// we promote a node with stale WAL while a more-advanced replica is
+// online, those forward bytes are unrecoverable — replicas resync
+// from the new timeline. The PRE-existing implementation tie-broke
+// by lexical node name with NO LSN comparison, which meant a
+// brand-new lag-behind replica named "aa-fresh" could beat a fully-
+// caught-up replica named "zz-canonical" and silently truncate WAL.
+//
+// Algorithm :
+//
+//  1. Find the maximum announced LSN across this node + peers.
+//  2. If our LSN < max → we are NOT the most advanced. Return false.
+//  3. If our LSN == max → tie-break by lexical name (deterministic
+//     so every node agrees on the same winner without a coordinator).
+//  4. Otherwise our LSN > max → we win outright.
+//
+// Peers with LSN==0 are treated as "not yet observed" — they don't
+// gate promotion. A 0/0 LSN exists only during the very first few
+// ticks before the local reconciler has read pg_lsn ; after that
+// the metric is monotonic.
 func (r *Reconciler) isMostAdvanced(snap Snapshot) bool {
-	others := make([]dcs.Member, 0, len(snap.Members))
+	var (
+		maxLSN     = snap.Self.LSN
+		bestName   = snap.Self.Name
+		peerExists bool
+	)
 	for _, m := range snap.Members {
-		if m.Name != snap.Self.Name {
-			others = append(others, m)
+		if m.Name == snap.Self.Name || m.LSN == 0 {
+			// Ignore self in the comparison set, and ignore peers whose
+			// LSN hasn't been observed yet (cold-start window).
+			continue
+		}
+		peerExists = true
+		switch {
+		case m.LSN > maxLSN:
+			maxLSN = m.LSN
+			bestName = m.Name
+		case m.LSN == maxLSN && m.Name < bestName:
+			// Tie-broken by name only when LSNs are equal — preserves
+			// the determinism property without giving lex order
+			// precedence over data freshness.
+			bestName = m.Name
 		}
 	}
-	if len(others) == 0 {
+	if !peerExists {
+		// Sole healthy member — we're the most advanced by definition.
 		return true
 	}
-	// Tie-break by lexical order so deterministic across all nodes.
-	sort.Slice(others, func(i, j int) bool { return others[i].Name < others[j].Name })
-	return snap.Self.Name <= others[0].Name
+	// We win iff our LSN reached the top AND we hold the tie-break.
+	return snap.Self.LSN == maxLSN && snap.Self.Name == bestName
 }
 
 // offDCStandbys returns the names of members in different DCs from us,

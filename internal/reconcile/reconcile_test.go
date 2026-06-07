@@ -214,12 +214,13 @@ func TestStepNoLeader_RefusesToPromoteWhenFenceFails(t *testing.T) {
 	}
 }
 
-func TestStepNoLeader_DefersToHigherSortedPeer(t *testing.T) {
-	// We're "b" ; "a" is also a candidate. Tie-break by lex order ; we
-	// must defer to "a" and stay a standby.
-	pg := &fakePG{role: postgres.RoleReplica}
+func TestStepNoLeader_DefersToMoreAdvancedPeer(t *testing.T) {
+	// We're "b" with LSN=100 ; "a" is at LSN=200 (more WAL replayed).
+	// We must defer to "a" — promoting us would silently truncate 100
+	// bytes of WAL. Lexical name order is irrelevant here ; LSN decides.
+	pg := &fakePG{role: postgres.RoleReplica, lsn: 100}
 	store := &fakeDCS{
-		members: []dcs.Member{{Name: "a"}, {Name: "b"}},
+		members: []dcs.Member{{Name: "a", LSN: 200}, {Name: "b", LSN: 100}},
 	}
 	f := &fakeFencer{}
 	r := New(pg, store, f, time.Second, quietLog())
@@ -229,7 +230,29 @@ func TestStepNoLeader_DefersToHigherSortedPeer(t *testing.T) {
 		t.Fatalf("step: %v", err)
 	}
 	if pg.promoted {
-		t.Error("promoted despite a lex-earlier peer existing")
+		t.Error("promoted despite a more-advanced peer (LSN 200 vs our 100)")
+	}
+	if f.calls != 0 {
+		t.Error("fenced anyone despite deferring")
+	}
+}
+
+func TestStepNoLeader_DefersOnEqualLSNLexTieBreak(t *testing.T) {
+	// LSNs equal — fallback to lex order. We're "b" and "a" is also at
+	// the same LSN, so "a" wins the tie-break and we stay a standby.
+	pg := &fakePG{role: postgres.RoleReplica, lsn: 500}
+	store := &fakeDCS{
+		members: []dcs.Member{{Name: "a", LSN: 500}, {Name: "b", LSN: 500}},
+	}
+	f := &fakeFencer{}
+	r := New(pg, store, f, time.Second, quietLog())
+	r.SetSelfFn(func() dcs.Member { return dcs.Member{Name: "b"} })
+
+	if err := r.step(context.Background()); err != nil {
+		t.Fatalf("step: %v", err)
+	}
+	if pg.promoted {
+		t.Error("promoted despite equal-LSN lex-earlier peer")
 	}
 	if f.calls != 0 {
 		t.Error("fenced anyone despite deferring")

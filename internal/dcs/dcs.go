@@ -31,6 +31,13 @@ type Member struct {
 	// ConnURI is the libpq URI standbys use to replicate from this member when
 	// it is the leader.
 	ConnURI string `json:"conn_uri"`
+	// LSN is the member's last observed WAL position, in pg_lsn-diff bytes
+	// from 0/0. Populated by the local reconciler from pg_last_wal_replay_lsn
+	// on replicas or pg_current_wal_lsn on primaries. Used by leader
+	// election : the most-advanced replica wins promotion, with lexical
+	// node-name as the tie-breaker only when LSNs are equal. Zero on
+	// startup before the first observation completes.
+	LSN uint64 `json:"lsn,omitempty"`
 }
 
 // DCS abstracts the distributed store. The etcd implementation uses a lease so
