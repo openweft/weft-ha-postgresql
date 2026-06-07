@@ -90,11 +90,27 @@ func NewEtcdDCS(endpoints []string, cluster string, sessionTTL int, log *slog.Lo
 // connect lazily opens the etcd client + session. The session owns the lease
 // that all leader-election keys hang off — losing the session means losing
 // leadership automatically (which is what we want when the node is fenced).
+//
+// connect also detects a DEAD session (network partition, lease expiry) and
+// rebuilds it transparently. Without this check the session struct would stay
+// cached forever even after etcd dropped the lease, which means a recovered
+// agent would never re-campaign : it would just keep talking to a corpse.
+// The reconcile loop interprets the rebuilt session as "we lost leadership",
+// promotes nobody, and waits for a peer to win the new election.
 func (d *EtcdDCS) connect(ctx context.Context) (*concurrency.Session, *concurrency.Election, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.session != nil && d.election != nil {
-		return d.session, d.election, nil
+		// Cheap liveness check : the session's Done() channel is closed
+		// when the lease expires or KeepAlive can no longer reach etcd.
+		select {
+		case <-d.session.Done():
+			d.log.Warn("etcd session lost (lease expired or partitioned) — rebuilding")
+			d.session = nil
+			d.election = nil
+		default:
+			return d.session, d.election, nil
+		}
 	}
 	if d.client == nil {
 		cli, err := clientv3.New(clientv3.Config{

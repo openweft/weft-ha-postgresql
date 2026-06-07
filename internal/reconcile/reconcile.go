@@ -13,6 +13,7 @@ import (
 
 	"github.com/openweft/weft-ha-postgresql/internal/dcs"
 	"github.com/openweft/weft-ha-postgresql/internal/fencing"
+	"github.com/openweft/weft-ha-postgresql/internal/metrics"
 	"github.com/openweft/weft-ha-postgresql/internal/postgres"
 )
 
@@ -108,6 +109,9 @@ func (r *Reconciler) step(ctx context.Context) error {
 	if r.stepHook != nil {
 		r.stepHook(ctx, snap)
 	}
+	// Surface the observed role to Prometheus before deciding what to do.
+	// 0=unknown, 1=primary, 2=replica — matches the metric Help text.
+	metrics.NodeRole.WithLabelValues(snap.Self.Name).Set(float64(snap.LocalRole))
 	// Always re-announce so the lease keeps our membership row alive.
 	if err := r.store.AnnounceMember(ctx, snap.Self); err != nil {
 		r.log.Warn("announce member failed", "err", err)
@@ -233,6 +237,10 @@ func (r *Reconciler) stepNoLeader(ctx context.Context, snap Snapshot) error {
 	if err := r.pg.Promote(ctx); err != nil {
 		return err
 	}
+	// Promotion succeeded — bump the failover counter BEFORE Campaign so we
+	// don't lose the signal if the etcd campaign blocks/fails ; the failover
+	// has happened either way.
+	metrics.FailoversTotal.Inc()
 	return r.store.Campaign(ctx, snap.Self)
 }
 

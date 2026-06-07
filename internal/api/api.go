@@ -67,12 +67,24 @@ func (s *Server) handleRole(want postgres.Role) http.HandlerFunc {
 	}
 }
 
+// handleHealth follows the IETF Health Check Response Format for HTTP APIs
+// (draft-inadarei-api-health-check) : the top-level `status` field is one of
+// "pass" / "fail" so a generic IETF-aware probe (Caddy active health check,
+// kubelet readinessProbe, openweft webui dashboard) can switch on the same
+// vocabulary across postgres-ha, forgejo-ha and irods-ha. `role` is the
+// openweft extension that lets the SQL router pick the primary.
+//
+// Even on a failed Role() lookup we keep the HTTP code at 200 — the endpoint
+// reports liveness ("the agent is responding"). Use /primary or /replica to
+// drive routing decisions.
 func (s *Server) handleHealth(w http.ResponseWriter, req *http.Request) {
 	body := map[string]any{}
 	if role, err := s.rp.Role(req.Context()); err != nil {
+		body["status"] = "fail"
 		body["role"] = postgres.RoleUnknown.String()
 		body["error"] = err.Error()
 	} else {
+		body["status"] = "pass"
 		body["role"] = role.String()
 	}
 	s.writeJSON(w, http.StatusOK, body)

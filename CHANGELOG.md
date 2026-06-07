@@ -7,6 +7,24 @@ and this project aims to adhere to [Semantic Versioning](https://semver.org/spec
 
 ## [Unreleased]
 
+### Fixed
+
+- `internal/api.handleHealth` now emits the IETF Health Check Response Format
+  vocabulary (`status: pass | fail`) alongside the openweft `role` extension.
+  Previously the endpoint only emitted `{role}`, which forced router /
+  dashboard code to special-case postgres-ha against the forgejo-ha and
+  irods-ha siblings. Regression guard : `TestHealthIETFVocabulary`.
+- `internal/dcs.EtcdDCS.connect` detects a dead `concurrency.Session`
+  (lease expired or partitioned away from the etcd quorum) and rebuilds it.
+  Before, a cached corpse-session would persist across the partition and
+  the agent never re-campaigned after recovery.
+- `internal/reconcile.Reconciler.step` now updates
+  `metrics.NodeRole{node}` every tick and bumps `metrics.FailoversTotal`
+  on a successful promotion. The metrics package previously registered both
+  vectors with `prometheus.MustRegister` but no code ever wrote to them.
+
+## [v0.2.0-rc1] — 2026-06-07
+
 ### Added
 
 - **Real HA reconcile loop** (replaces the previous scaffold that returned
