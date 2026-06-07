@@ -33,6 +33,25 @@ type Config struct {
 	// disables real fencing — degrades to NoopFencer (UNSAFE in
 	// production ; only useful for unit tests).
 	WeftEndpoint string
+	// WeftTLSCA is the PEM-encoded CA bundle used to verify the
+	// weft-agent's server cert. REQUIRED for production ; absence
+	// requires the operator to explicitly pass --weft-insecure (the
+	// SSH-tunnel / dev case). The fencer is the load-bearing safety
+	// hinge — a MITM that swallows StopVM lets an old primary keep
+	// taking writes while a new one is promoted = split-brain.
+	WeftTLSCA string
+	// WeftTLSCert + WeftTLSKey enable mTLS so the agent verifies the
+	// fencer's identity too. Optional but recommended.
+	WeftTLSCert string
+	WeftTLSKey  string
+	// WeftTLSServerName overrides the SNI / ServerName check ; default
+	// is derived from the endpoint host. Useful when the cert was
+	// issued for an internal name but the dial uses an IP.
+	WeftTLSServerName string
+	// WeftInsecure opts out of TLS — only legitimate when the fencer
+	// dials over a privileged channel (SSH local-forward, WireGuard
+	// mesh interface). Logs a loud warning on every dial.
+	WeftInsecure bool
 	// WeftProject is the weft project hosting the Postgres micro-VMs
 	// (the per-plugin install project, e.g. "data"). Used by the gRPC
 	// fencer to disambiguate same-named VMs across projects.

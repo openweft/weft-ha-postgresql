@@ -83,6 +83,11 @@ func agentCmd() *cobra.Command {
 	f.StringVar(&cfg.APIAddr, "api-addr", ":8008", "role API listen address")
 	f.StringVar(&cfg.MetricsAddr, "metrics-addr", ":9101", "Prometheus metrics listen address")
 	f.StringVar(&cfg.WeftEndpoint, "weft-endpoint", "", "weft-agent gRPC endpoint for fencing (host:port)")
+	f.StringVar(&cfg.WeftTLSCA, "weft-tls-ca", "", "PEM CA bundle to verify the weft-agent server cert (REQUIRED unless --weft-insecure)")
+	f.StringVar(&cfg.WeftTLSCert, "weft-tls-cert", "", "client cert for mTLS to the weft-agent (optional ; pair with --weft-tls-key)")
+	f.StringVar(&cfg.WeftTLSKey, "weft-tls-key", "", "client key for mTLS to the weft-agent (optional ; pair with --weft-tls-cert)")
+	f.StringVar(&cfg.WeftTLSServerName, "weft-tls-server-name", "", "override SNI / ServerName for cert verification (defaults to the endpoint host)")
+	f.BoolVar(&cfg.WeftInsecure, "weft-insecure", false, "dial the weft-agent without TLS (LOUD warning ; only legitimate over SSH-tunnel / WireGuard mesh ; NEVER in production)")
 	f.StringVar(&cfg.WeftProject, "weft-project", "", "weft project hosting the Postgres microVMs")
 	f.IntVar(&cfg.EtcdSessionTTLSec, "etcd-session-ttl", 15, "etcd lease TTL in seconds (failover floor)")
 	f.DurationVar(&cfg.FenceTimeout, "fence-timeout", 30*time.Second, "wait-for-stopped timeout during fencing")
@@ -102,14 +107,34 @@ func runAgent(ctx context.Context, cfg config.Config, period time.Duration) erro
 	store := dcs.NewEtcdDCS(cfg.EtcdEndpoints, cfg.ClusterName, cfg.EtcdSessionTTLSec, log)
 	defer func() { _ = store.Close() }()
 
-	// Wire the fencer : when --weft-endpoint is set, hard-stop via gRPC ;
-	// otherwise fall back to NoopFencer with a loud warning (test-mode only).
+	// Wire the fencer. Configuration matrix :
+	//   --weft-endpoint absent              → NoopFencer (test only, loud warn)
+	//   --weft-endpoint + --weft-tls-ca     → TLS-gated fencer (RECOMMENDED)
+	//   --weft-endpoint + --weft-insecure   → insecure dial (loud warn)
+	//   --weft-endpoint without either flag → ERROR : refuse to start
 	var fencer fencing.Fencer
 	if cfg.WeftEndpoint == "" {
 		log.Warn("no --weft-endpoint configured ; using NoopFencer — DO NOT run unattended")
 		fencer = fencing.NewNoopFencer(log)
 	} else {
-		stopper := fencing.NewGRPCStopper(cfg.WeftEndpoint, cfg.WeftProject, log)
+		var stopper *fencing.GRPCStopper
+		switch {
+		case cfg.WeftTLSCA != "":
+			tlsCfg, err := fencing.LoadClientTLSConfig(cfg.WeftTLSCA, cfg.WeftTLSCert, cfg.WeftTLSKey, cfg.WeftTLSServerName)
+			if err != nil {
+				return fmt.Errorf("weft-tls : %w", err)
+			}
+			stopper = fencing.NewGRPCStopperTLS(cfg.WeftEndpoint, cfg.WeftProject, tlsCfg, log)
+			log.Info("fencer wired with TLS",
+				"endpoint", cfg.WeftEndpoint,
+				"ca", cfg.WeftTLSCA,
+				"mtls", cfg.WeftTLSCert != "")
+		case cfg.WeftInsecure:
+			stopper = fencing.NewGRPCStopper(cfg.WeftEndpoint, cfg.WeftProject, log)
+			log.Warn("fencer wired WITHOUT TLS (--weft-insecure) ; MITM can swallow StopVM and cause split-brain ; only legitimate over SSH-tunnel / WireGuard mesh ; NEVER in production")
+		default:
+			return fmt.Errorf("fencer : --weft-endpoint requires either --weft-tls-ca <path> (recommended) or --weft-insecure (dev only) ; refusing to start with an unauthenticated fencer that could silently split-brain")
+		}
 		defer stopper.Close()
 		fencer = fencing.NewVMFencer(stopper, cfg.FenceTimeout, log)
 	}

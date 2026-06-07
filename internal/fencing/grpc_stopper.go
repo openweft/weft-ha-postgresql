@@ -7,24 +7,35 @@ package fencing
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	weftv1 "github.com/openweft/weft-proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
 
 // GRPCStopper dials a weft-agent gRPC endpoint and uses StopVM + VMStatus
-// to confirm a fenced VM has reached a stopped state. Production wiring
-// in main.go : NewGRPCStopper(endpoint, project, log).
+// to confirm a fenced VM has reached a stopped state.
+//
+// SECURITY : the fencer is the load-bearing safety hinge of the HA story.
+// A MITM that swallows StopVM lets an old primary keep accepting writes
+// while the new one is promoted — split-brain. TLS is therefore SECURE BY
+// DEFAULT : NewGRPCStopperTLS requires a *tls.Config with at least the
+// server CA pinned. NewGRPCStopper (legacy) returns an insecure stopper
+// and logs a loud warning so production deployments can grep for it.
 type GRPCStopper struct {
 	endpoint string
 	project  string
+	tls      *tls.Config // nil = insecure (legacy, warned)
 	log      *slog.Logger
 
 	// Pooled connection — reused across Fence calls so we don't pay the
@@ -32,25 +43,86 @@ type GRPCStopper struct {
 	conn *grpc.ClientConn
 }
 
-// NewGRPCStopper returns a VMStopper bound to a single weft-agent endpoint.
-// endpoint is "host:port" ; project is the weft project the Postgres VMs
-// live in (cluster.hcl's per-plugin project). TLS is OPTIONAL today — set
-// up the daemon flag --weft-tls when the agent listener has TLS enabled.
+// NewGRPCStopperTLS returns a VMStopper that dials the weft-agent over
+// TLS with the supplied config. Pass at minimum a RootCAs pool that
+// trusts the weft-agent's server cert (or use LoadClientTLSConfig to
+// read the CA + optional mTLS key pair from disk).
 //
 // The function does NOT dial eagerly ; the first StopVM/WaitStopped call
 // opens the connection so the daemon doesn't fail to start when the
 // control plane is briefly unreachable.
+func NewGRPCStopperTLS(endpoint, project string, tlsCfg *tls.Config, log *slog.Logger) *GRPCStopper {
+	if tlsCfg == nil {
+		// Caller error — defensive : fall back to the insecure flavour
+		// rather than crash, but loudly.
+		log.Error("NewGRPCStopperTLS called with nil *tls.Config — falling back to INSECURE ; this is a programming bug")
+		return NewGRPCStopper(endpoint, project, log)
+	}
+	return &GRPCStopper{endpoint: endpoint, project: project, tls: tlsCfg, log: log}
+}
+
+// NewGRPCStopper returns an INSECURE VMStopper. Kept for the dev /
+// SSH-tunneled-loopback case where TLS would be redundant ; logs a
+// loud warning on every dial so production misconfiguration is loud.
+// Prefer NewGRPCStopperTLS.
 func NewGRPCStopper(endpoint, project string, log *slog.Logger) *GRPCStopper {
 	return &GRPCStopper{endpoint: endpoint, project: project, log: log}
+}
+
+// LoadClientTLSConfig builds a *tls.Config from disk paths. caPath is
+// REQUIRED — it pins the agent's server identity. certPath + keyPath
+// are OPTIONAL and enable mTLS when both are set (recommended for
+// production : the agent verifies the fencer's identity too, so an
+// attacker who steals only the CA bundle can't impersonate the fencer
+// to issue arbitrary StopVMs).
+//
+// Empty caPath returns (nil, error) — the operator has to deliberately
+// pick insecure mode through the main.go CLI gate instead.
+func LoadClientTLSConfig(caPath, certPath, keyPath, serverName string) (*tls.Config, error) {
+	if caPath == "" {
+		return nil, errors.New("LoadClientTLSConfig: --weft-tls-ca is required (or pass --weft-insecure for the dev / SSH-tunnel case)")
+	}
+	caPEM, err := os.ReadFile(caPath)
+	if err != nil {
+		return nil, fmt.Errorf("read CA %s: %w", caPath, err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("CA %s: no PEM certificates parsed", caPath)
+	}
+	cfg := &tls.Config{
+		RootCAs:    pool,
+		MinVersion: tls.VersionTLS12,
+		ServerName: serverName, // empty = derive from dial target
+	}
+	if certPath != "" || keyPath != "" {
+		if certPath == "" || keyPath == "" {
+			return nil, errors.New("LoadClientTLSConfig: mTLS requires both --weft-tls-cert and --weft-tls-key")
+		}
+		pair, err := tls.LoadX509KeyPair(certPath, keyPath)
+		if err != nil {
+			return nil, fmt.Errorf("load mTLS keypair %s + %s: %w", certPath, keyPath, err)
+		}
+		cfg.Certificates = []tls.Certificate{pair}
+	}
+	return cfg, nil
 }
 
 func (s *GRPCStopper) dial(ctx context.Context) (weftv1.WeftAgentClient, error) {
 	if s.conn != nil {
 		return weftv1.NewWeftAgentClient(s.conn), nil
 	}
-	cc, err := grpc.NewClient(s.endpoint,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
+	var creds credentials.TransportCredentials
+	if s.tls != nil {
+		creds = credentials.NewTLS(s.tls)
+	} else {
+		// Loud warning every time the connection is established — production
+		// deployments running insecure surface in operator logs.
+		s.log.Warn("dialing weft-agent INSECURELY (no TLS) ; MITM can swallow StopVM and cause split-brain — set --weft-tls-ca for production",
+			"endpoint", s.endpoint)
+		creds = insecure.NewCredentials()
+	}
+	cc, err := grpc.NewClient(s.endpoint, grpc.WithTransportCredentials(creds))
 	if err != nil {
 		return nil, fmt.Errorf("dial weft-agent %s: %w", s.endpoint, err)
 	}
