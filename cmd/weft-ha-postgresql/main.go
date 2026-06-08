@@ -13,6 +13,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	weftslognats "github.com/openweft/weft-slognats"
+
 	"github.com/openweft/weft-ha-postgresql/internal/api"
 	"github.com/openweft/weft-ha-postgresql/internal/config"
 	"github.com/openweft/weft-ha-postgresql/internal/dcs"
@@ -96,7 +98,12 @@ func agentCmd() *cobra.Command {
 }
 
 func runAgent(ctx context.Context, cfg config.Config, period time.Duration) error {
-	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	// Logger fans out to stderr (always) AND NATS WARN+ERROR records
+	// at weft.ha.postgres.<node>.log so weft-doctor can pick up
+	// failover incidents. WEFT_NATS_URL env unset → stderr-only.
+	log, logCloser := weftslognats.SetupFromEnv("weft.ha.postgres." + cfg.NodeName + ".log")
+	defer logCloser.Close()
+	slog.SetDefault(log)
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
