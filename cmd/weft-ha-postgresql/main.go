@@ -104,6 +104,7 @@ func runAgent(ctx context.Context, cfg config.Config, period time.Duration) erro
 	log, logCloser := weftslognats.SetupFromEnv("weft.ha.postgres." + cfg.NodeName + ".log")
 	defer logCloser.Close()
 	slog.SetDefault(log)
+	defer weftslognats.PanicReporter("weft-ha-postgresql")
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

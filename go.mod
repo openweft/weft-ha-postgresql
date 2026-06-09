@@ -16,7 +16,7 @@ require (
 
 require (
 	github.com/openweft/weft-proto v0.5.0
-	github.com/openweft/weft-slognats v0.2.0
+	github.com/openweft/weft-slognats v0.3.0
 	go.etcd.io/etcd/client/v3 v3.6.11
 	go.etcd.io/etcd/server/v3 v3.6.11
 	google.golang.org/grpc v1.80.0
