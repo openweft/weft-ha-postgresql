@@ -14,12 +14,12 @@ import (
 // fakePG is a hand-rolled stub for the postgres.Controller. Each method
 // records whether it was called so the assertions read like English.
 type fakePG struct {
-	role          postgres.Role
-	lsn           uint64
-	roleErr       error
-	promoted      bool
-	demotedTo     string
-	syncStandbys  []string
+	role         postgres.Role
+	lsn          uint64
+	roleErr      error
+	promoted     bool
+	demotedTo    string
+	syncStandbys []string
 }
 
 func (f *fakePG) Role(ctx context.Context) (postgres.Role, error) {
@@ -101,7 +101,7 @@ func quietLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, n
 func TestStepAsLeader_ConfiguresSyncStandbysFromOtherDCs(t *testing.T) {
 	pg := &fakePG{role: postgres.RolePrimary}
 	store := &fakeDCS{
-		leader: dcs.Member{Name: "n1", DC: "dc-a"},
+		leader:    dcs.Member{Name: "n1", DC: "dc-a"},
 		hasLeader: true,
 		members: []dcs.Member{
 			{Name: "n1", DC: "dc-a"},

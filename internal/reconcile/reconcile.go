@@ -87,16 +87,18 @@ func (r *Reconciler) Run(ctx context.Context) error {
 // step is one pass of the state machine. The shape :
 //
 //  1. observe : local role + LSN, current leader + members, self identity.
+//
 //  2. announce self under the lease so peers discover us.
+//
 //  3. dispatch on (HasLeader, IsLeaderUs, LocalRole) :
 //
 //     a) leader exists and IS us       → keep the lease, reconcile
-//        synchronous_standby_names against the live member list.
+//     synchronous_standby_names against the live member list.
 //     b) leader exists and is NOT us   → ensure we replicate from them.
-//        Demote if we're somehow primary (split-brain detection).
+//     Demote if we're somehow primary (split-brain detection).
 //     c) no leader, we're the candidate → FENCE the old primaries, then
-//        Promote + Campaign. Conservative : only the most-advanced
-//        standby campaigns ; others stay as standbys.
+//     Promote + Campaign. Conservative : only the most-advanced
+//     standby campaigns ; others stay as standbys.
 //
 // Step is idempotent : running it twice in succession on a converged
 // cluster is a no-op.
