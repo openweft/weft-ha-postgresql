@@ -1,6 +1,6 @@
 module github.com/openweft/weft-ha-postgresql
 
-go 1.26.4
+go 1.27.1
 
 require (
 	// pgx v5 — drives the local Postgres instance (Role detection via

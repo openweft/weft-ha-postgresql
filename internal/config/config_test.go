@@ -22,12 +22,12 @@ func TestValidate_OK(t *testing.T) {
 
 func TestValidate_Errors(t *testing.T) {
 	cases := map[string]func(*Config){
-		"missing node name":   func(c *Config) { c.NodeName = "" },
-		"missing cluster":     func(c *Config) { c.ClusterName = "" },
-		"missing dc":          func(c *Config) { c.DC = "" },
-		"no etcd endpoints":   func(c *Config) { c.EtcdEndpoints = nil },
-		"missing postgres":    func(c *Config) { c.PostgresConnURI = "" },
-		"missing api addr":    func(c *Config) { c.APIAddr = "" },
+		"missing node name":    func(c *Config) { c.NodeName = "" },
+		"missing cluster":      func(c *Config) { c.ClusterName = "" },
+		"missing dc":           func(c *Config) { c.DC = "" },
+		"no etcd endpoints":    func(c *Config) { c.EtcdEndpoints = nil },
+		"missing postgres":     func(c *Config) { c.PostgresConnURI = "" },
+		"missing api addr":     func(c *Config) { c.APIAddr = "" },
 		"missing metrics addr": func(c *Config) { c.MetricsAddr = "" },
 	}
 	for name, mutate := range cases {
