@@ -7,16 +7,13 @@ require (
 	// pg_is_in_recovery(), LSN via pg_*_wal_*_lsn(), Promote via
 	// pg_promote()). Pure Go, no libpq dependency.
 	github.com/jackc/pgx/v5 v5.7.6
+	github.com/openweft/weft-proto v0.14.0
+	github.com/openweft/weft-slognats v0.3.0
 	// Prometheus: /metrics scrape on a port separate from the role API, so a
 	// scrape handler hang can never stall the reconcile loop or the router probe.
 	github.com/prometheus/client_golang v1.20.5
 	// Cobra: openweft CLI convention (never the stdlib flag package).
 	github.com/spf13/cobra v1.10.2
-)
-
-require (
-	github.com/openweft/weft-proto v0.14.0
-	github.com/openweft/weft-slognats v0.3.0
 	go.etcd.io/etcd/client/v3 v3.6.11
 	go.etcd.io/etcd/server/v3 v3.6.11
 	google.golang.org/grpc v1.80.0
