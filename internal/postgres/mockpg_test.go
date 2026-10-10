@@ -78,7 +78,9 @@ func serveMockConn(conn net.Conn, answers []mockQuery) {
 	// pgx's simple protocol requires the server to advertise these.
 	send(be, &pgproto3.ParameterStatus{Name: "standard_conforming_strings", Value: "on"})
 	send(be, &pgproto3.ParameterStatus{Name: "client_encoding", Value: "UTF8"})
-	send(be, &pgproto3.BackendKeyData{ProcessID: 1, SecretKey: 1})
+	// pgx v5.8 made SecretKey a []byte (protocol 3.2 allows longer keys);
+	// four bytes is the protocol 3.0 length, the same value as before.
+	send(be, &pgproto3.BackendKeyData{ProcessID: 1, SecretKey: []byte{0, 0, 0, 1}})
 	send(be, &pgproto3.ReadyForQuery{TxStatus: 'I'})
 	if be.Flush() != nil {
 		return
